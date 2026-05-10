@@ -9,4 +9,7 @@ export const modelPath = join(
 export const modelOptions = {
   modelPath,
   chatTemplate: "gemma",
+  reasoning: {
+    promptPrefix: false as const,
+  },
 };

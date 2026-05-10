@@ -49,6 +49,11 @@ export interface LlamaCppModelConfig {
    * deepseek3, command-r, and more.
    */
   chatTemplate?: string;
+  /**
+   * Extract model thinking into AI SDK reasoning parts.
+   * Set to true for Gemma 4 thinking support.
+   */
+  reasoning?: boolean | LlamaCppReasoningConfig;
 }
 
 export interface LlamaCppGenerationConfig {
@@ -57,6 +62,254 @@ export interface LlamaCppGenerationConfig {
   topP?: number;
   topK?: number;
   stopSequences?: string[];
+}
+
+export type LlamaCppReasoningFormat =
+  | "gemma4"
+  | "think-tags"
+  | {
+      opening: string;
+      closing: string;
+    };
+
+export interface LlamaCppReasoningConfig {
+  /**
+   * Reasoning marker format to extract from model output.
+   * Default: "gemma4" (`<|channel>thought\n...<channel|>`)
+   */
+  format?: LlamaCppReasoningFormat;
+  /**
+   * Prefix added to the first system prompt to enable thinking.
+   * Gemma 4 defaults to `<|think|>\n`. Set to false to disable prompt injection.
+   */
+  promptPrefix?: string | false;
+}
+
+interface ResolvedReasoningConfig {
+  opening: string;
+  closing: string;
+  promptPrefix?: string;
+}
+
+export interface ParsedReasoningPart {
+  type: "text" | "reasoning";
+  text: string;
+}
+
+const GEMMA4_REASONING_OPENING = "<|channel>thought\n";
+const GEMMA4_REASONING_CLOSING = "<channel|>";
+const GEMMA4_REASONING_PROMPT_PREFIX = "<|think|>\n";
+
+export function resolveReasoningConfig(
+  reasoning?: boolean | LlamaCppReasoningConfig
+): ResolvedReasoningConfig | undefined {
+  if (!reasoning) {
+    return undefined;
+  }
+
+  const config = reasoning === true ? {} : reasoning;
+  const format = config.format ?? "gemma4";
+  const markers =
+    format === "gemma4"
+      ? {
+          opening: GEMMA4_REASONING_OPENING,
+          closing: GEMMA4_REASONING_CLOSING,
+          defaultPromptPrefix: GEMMA4_REASONING_PROMPT_PREFIX,
+        }
+      : format === "think-tags"
+        ? {
+            opening: "<think>",
+            closing: "</think>",
+            defaultPromptPrefix: undefined,
+          }
+        : {
+            opening: format.opening,
+            closing: format.closing,
+            defaultPromptPrefix: undefined,
+          };
+
+  return {
+    opening: markers.opening,
+    closing: markers.closing,
+    promptPrefix:
+      config.promptPrefix === false
+        ? undefined
+        : (config.promptPrefix ?? markers.defaultPromptPrefix),
+  };
+}
+
+export function splitReasoningContent(
+  text: string,
+  reasoning: Pick<ResolvedReasoningConfig, "opening" | "closing">
+): ParsedReasoningPart[] {
+  const parts: ParsedReasoningPart[] = [];
+  let cursor = 0;
+  let foundReasoning = false;
+
+  while (cursor < text.length) {
+    const openingIndex = text.indexOf(reasoning.opening, cursor);
+
+    if (openingIndex === -1) {
+      parts.push({ type: "text", text: text.slice(cursor) });
+      break;
+    }
+
+    foundReasoning = true;
+
+    if (openingIndex > cursor) {
+      parts.push({ type: "text", text: text.slice(cursor, openingIndex) });
+    }
+
+    const reasoningStart = openingIndex + reasoning.opening.length;
+    const closingIndex = text.indexOf(reasoning.closing, reasoningStart);
+
+    if (closingIndex === -1) {
+      parts.push({ type: "reasoning", text: text.slice(reasoningStart) });
+      cursor = text.length;
+      break;
+    }
+
+    parts.push({
+      type: "reasoning",
+      text: text.slice(reasoningStart, closingIndex),
+    });
+    cursor = closingIndex + reasoning.closing.length;
+  }
+
+  if (!foundReasoning) {
+    return [{ type: "text", text }];
+  }
+
+  return parts;
+}
+
+function appendParsedContent(
+  content: LanguageModelV3Content[],
+  parts: ParsedReasoningPart[],
+  options: { includeText: boolean } = { includeText: true }
+): void {
+  for (const part of parts) {
+    if (
+      part.text.length === 0 ||
+      (part.type === "text" && !options.includeText)
+    ) {
+      continue;
+    }
+
+    if (part.type === "reasoning") {
+      content.push({
+        type: "reasoning",
+        text: part.text,
+        providerMetadata: undefined,
+      });
+    } else {
+      content.push({
+        type: "text",
+        text: part.text,
+        providerMetadata: undefined,
+      });
+    }
+  }
+}
+
+function getVisibleText(parts: ParsedReasoningPart[]): string {
+  return parts
+    .filter((part) => part.type === "text")
+    .map((part) => part.text)
+    .join("");
+}
+
+function getReasoningSuffixLength(buffer: string, marker: string): number {
+  const maxLength = Math.min(buffer.length, marker.length - 1);
+
+  for (let length = maxLength; length > 0; length--) {
+    if (marker.startsWith(buffer.slice(buffer.length - length))) {
+      return length;
+    }
+  }
+
+  return 0;
+}
+
+function createReasoningTokenProcessor(
+  reasoning: Pick<ResolvedReasoningConfig, "opening" | "closing">,
+  emitText: (text: string) => void,
+  emitReasoning: (text: string) => void,
+  endReasoning: () => void
+): { push: (token: string) => void; flush: () => void } {
+  let buffer = "";
+  let state: "text" | "reasoning" = "text";
+
+  const process = () => {
+    while (buffer.length > 0) {
+      if (state === "text") {
+        const openingIndex = buffer.indexOf(reasoning.opening);
+
+        if (openingIndex !== -1) {
+          if (openingIndex > 0) {
+            emitText(buffer.slice(0, openingIndex));
+          }
+          buffer = buffer.slice(openingIndex + reasoning.opening.length);
+          state = "reasoning";
+          continue;
+        }
+
+        const suffixLength = getReasoningSuffixLength(buffer, reasoning.opening);
+        const emitLength = buffer.length - suffixLength;
+        if (emitLength === 0) {
+          return;
+        }
+
+        emitText(buffer.slice(0, emitLength));
+        buffer = buffer.slice(emitLength);
+        return;
+      }
+
+      const closingIndex = buffer.indexOf(reasoning.closing);
+
+      if (closingIndex !== -1) {
+        if (closingIndex > 0) {
+          emitReasoning(buffer.slice(0, closingIndex));
+        }
+        buffer = buffer.slice(closingIndex + reasoning.closing.length);
+        endReasoning();
+        state = "text";
+        continue;
+      }
+
+      const suffixLength = getReasoningSuffixLength(buffer, reasoning.closing);
+      const emitLength = buffer.length - suffixLength;
+      if (emitLength === 0) {
+        return;
+      }
+
+      emitReasoning(buffer.slice(0, emitLength));
+      buffer = buffer.slice(emitLength);
+      return;
+    }
+  };
+
+  return {
+    push(token: string) {
+      buffer += token;
+      process();
+    },
+    flush() {
+      if (buffer.length > 0) {
+        if (state === "reasoning") {
+          emitReasoning(buffer);
+        } else {
+          emitText(buffer);
+        }
+        buffer = "";
+      }
+
+      if (state === "reasoning") {
+        endReasoning();
+        state = "text";
+      }
+    },
+  };
 }
 
 export function convertFinishReason(
@@ -295,13 +548,32 @@ Rules:
  */
 export function convertMessages(
   messages: LanguageModelV3Message[],
-  tools?: LanguageModelV3FunctionTool[]
+  tools?: LanguageModelV3FunctionTool[],
+  reasoning?: Pick<ResolvedReasoningConfig, "promptPrefix">
 ): ChatMessage[] {
   const result: ChatMessage[] = [];
+  let reasoningPromptAdded = false;
+
+  const addMessage = (message: ChatMessage) => {
+    if (
+      reasoning?.promptPrefix &&
+      !reasoningPromptAdded &&
+      message.role === "system"
+    ) {
+      result.push({
+        ...message,
+        content: `${reasoning.promptPrefix}${message.content}`,
+      });
+      reasoningPromptAdded = true;
+      return;
+    }
+
+    result.push(message);
+  };
 
   // Add tool system prompt if tools are provided
   if (tools && tools.length > 0) {
-    result.push({
+    addMessage({
       role: "system",
       content: buildToolSystemPrompt(tools),
     });
@@ -310,7 +582,7 @@ export function convertMessages(
   for (const message of messages) {
     switch (message.role) {
       case "system":
-        result.push({
+        addMessage({
           role: "system",
           content: message.content,
         });
@@ -324,7 +596,7 @@ export function convertMessages(
           }
           // Note: File parts are not supported in this implementation
         }
-        result.push({
+        addMessage({
           role: "user",
           content: userContent,
         });
@@ -363,7 +635,7 @@ export function convertMessages(
         }
 
         if (assistantContent) {
-          result.push({
+          addMessage({
             role: "assistant",
             content: assistantContent,
           });
@@ -403,7 +675,7 @@ export function convertMessages(
                 .join("\n");
             }
 
-            result.push({
+            addMessage({
               role: "user",
               content: `Tool "${part.toolName}" (id: ${part.toolCallId}) returned:\n${resultText}`,
             });
@@ -411,6 +683,13 @@ export function convertMessages(
         }
         break;
     }
+  }
+
+  if (reasoning?.promptPrefix && !reasoningPromptAdded) {
+    result.unshift({
+      role: "system",
+      content: reasoning.promptPrefix,
+    });
   }
 
   return result;
@@ -481,6 +760,7 @@ export class LlamaCppLanguageModel implements LanguageModelV3 {
     options: LanguageModelV3CallOptions
   ): Promise<LanguageModelV3GenerateResult> {
     const handle = await this.ensureModelLoaded();
+    const reasoningConfig = resolveReasoningConfig(this.config.reasoning);
 
     // Extract function tools from the tools array
     const functionTools =
@@ -494,7 +774,8 @@ export class LlamaCppLanguageModel implements LanguageModelV3 {
       options.prompt,
       hasTools && options.toolChoice?.type !== "none"
         ? functionTools
-        : undefined
+        : undefined,
+      reasoningConfig
     );
 
     // Convert JSON schema to GBNF grammar if structured output is requested
@@ -520,6 +801,10 @@ export class LlamaCppLanguageModel implements LanguageModelV3 {
     };
 
     const result = await generate(handle, generateOptions);
+    const parsedContent = reasoningConfig
+      ? splitReasoningContent(result.text, reasoningConfig)
+      : [{ type: "text" as const, text: result.text }];
+    const visibleText = getVisibleText(parsedContent);
 
     const warnings: SharedV3Warning[] = [];
     const content: LanguageModelV3Content[] = [];
@@ -527,9 +812,11 @@ export class LlamaCppLanguageModel implements LanguageModelV3 {
 
     // Try to parse tool calls if tools were provided
     if (hasTools && options.toolChoice?.type !== "none") {
-      const toolCalls = parseToolCalls(result.text);
+      const toolCalls = parseToolCalls(visibleText);
 
       if (toolCalls && toolCalls.length > 0) {
+        appendParsedContent(content, parsedContent, { includeText: false });
+
         // Add tool calls to content
         for (const toolCall of toolCalls) {
           content.push({
@@ -547,19 +834,11 @@ export class LlamaCppLanguageModel implements LanguageModelV3 {
         };
       } else {
         // No valid tool calls found, return as text
-        content.push({
-          type: "text",
-          text: result.text,
-          providerMetadata: undefined,
-        });
+        appendParsedContent(content, parsedContent);
       }
     } else {
       // No tools, return text content
-      content.push({
-        type: "text",
-        text: result.text,
-        providerMetadata: undefined,
-      });
+      appendParsedContent(content, parsedContent);
     }
 
     return {
@@ -577,6 +856,7 @@ export class LlamaCppLanguageModel implements LanguageModelV3 {
     options: LanguageModelV3CallOptions
   ): Promise<LanguageModelV3StreamResult> {
     const handle = await this.ensureModelLoaded();
+    const reasoningConfig = resolveReasoningConfig(this.config.reasoning);
 
     // Extract function tools from the tools array
     const functionTools =
@@ -590,7 +870,8 @@ export class LlamaCppLanguageModel implements LanguageModelV3 {
       options.prompt,
       hasTools && options.toolChoice?.type !== "none"
         ? functionTools
-        : undefined
+        : undefined,
+      reasoningConfig
     );
 
     // Convert JSON schema to GBNF grammar if structured output is requested
@@ -628,80 +909,138 @@ export class LlamaCppLanguageModel implements LanguageModelV3 {
 
           // Collect the full text for tool call parsing
           let fullText = "";
+          let visibleText = "";
 
           // Track whether we've detected this is a tool call (to suppress text deltas)
           let isToolCallMode = false;
           let detectionComplete = false;
           let textStartEmitted = false;
+          let reasoningId: string | undefined;
           // Buffer tokens during detection phase when tools are present
           let tokenBuffer: string[] = [];
+
+          const emitTextDelta = (delta: string) => {
+            if (delta.length === 0) {
+              return;
+            }
+
+            visibleText += delta;
+
+            // When tools are provided, detect if output looks like a tool call
+            if (hasTools && options.toolChoice?.type !== "none") {
+              if (!detectionComplete) {
+                // Buffer tokens during detection phase
+                tokenBuffer.push(delta);
+
+                const trimmed = visibleText.trimStart();
+                // Check if it starts with JSON object/array (tool call pattern)
+                if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+                  isToolCallMode = true;
+                  detectionComplete = true;
+                  // Don't flush buffer - suppress all tokens for tool calls
+                  return;
+                } else if (trimmed.length > 0) {
+                  // First non-whitespace char is not JSON - it's regular text
+                  detectionComplete = true;
+                  // Flush buffered tokens as text deltas
+                  if (!textStartEmitted) {
+                    controller.enqueue({
+                      type: "text-start",
+                      id: textId,
+                    });
+                    textStartEmitted = true;
+                  }
+                  for (const bufferedToken of tokenBuffer) {
+                    controller.enqueue({
+                      type: "text-delta",
+                      id: textId,
+                      delta: bufferedToken,
+                    });
+                  }
+                  tokenBuffer = [];
+                  return;
+                }
+                // Still in detection phase (only whitespace so far)
+                return;
+              }
+
+              // If in tool call mode, don't emit text deltas
+              if (isToolCallMode) {
+                return;
+              }
+            }
+
+            // Emit text start on first actual text delta
+            if (!textStartEmitted) {
+              controller.enqueue({
+                type: "text-start",
+                id: textId,
+              });
+              textStartEmitted = true;
+            }
+
+            controller.enqueue({
+              type: "text-delta",
+              id: textId,
+              delta,
+            });
+          };
+
+          const emitReasoningDelta = (delta: string) => {
+            if (delta.length === 0) {
+              return;
+            }
+
+            if (!reasoningId) {
+              reasoningId = crypto.randomUUID();
+              controller.enqueue({
+                type: "reasoning-start",
+                id: reasoningId,
+              });
+            }
+
+            controller.enqueue({
+              type: "reasoning-delta",
+              id: reasoningId,
+              delta,
+            });
+          };
+
+          const endReasoning = () => {
+            if (!reasoningId) {
+              return;
+            }
+
+            controller.enqueue({
+              type: "reasoning-end",
+              id: reasoningId,
+            });
+            reasoningId = undefined;
+          };
+
+          const reasoningProcessor = reasoningConfig
+            ? createReasoningTokenProcessor(
+                reasoningConfig,
+                emitTextDelta,
+                emitReasoningDelta,
+                endReasoning
+              )
+            : undefined;
 
           const result = await generateStream(
             handle,
             generateOptions,
             (token) => {
               fullText += token;
-
-              // When tools are provided, detect if output looks like a tool call
-              if (hasTools && options.toolChoice?.type !== "none") {
-                if (!detectionComplete) {
-                  // Buffer tokens during detection phase
-                  tokenBuffer.push(token);
-
-                  const trimmed = fullText.trimStart();
-                  // Check if it starts with JSON object/array (tool call pattern)
-                  if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
-                    isToolCallMode = true;
-                    detectionComplete = true;
-                    // Don't flush buffer - suppress all tokens for tool calls
-                    return;
-                  } else if (trimmed.length > 0) {
-                    // First non-whitespace char is not JSON - it's regular text
-                    detectionComplete = true;
-                    // Flush buffered tokens as text deltas
-                    if (!textStartEmitted) {
-                      controller.enqueue({
-                        type: "text-start",
-                        id: textId,
-                      });
-                      textStartEmitted = true;
-                    }
-                    for (const bufferedToken of tokenBuffer) {
-                      controller.enqueue({
-                        type: "text-delta",
-                        id: textId,
-                        delta: bufferedToken,
-                      });
-                    }
-                    tokenBuffer = [];
-                    return;
-                  }
-                  // Still in detection phase (only whitespace so far)
-                  return;
-                }
-
-                // If in tool call mode, don't emit text deltas
-                if (isToolCallMode) {
-                  return;
-                }
+              if (reasoningProcessor) {
+                reasoningProcessor.push(token);
+              } else {
+                emitTextDelta(token);
               }
-
-              // Emit text start on first actual text delta
-              if (!textStartEmitted) {
-                controller.enqueue({
-                  type: "text-start",
-                  id: textId,
-                });
-                textStartEmitted = true;
-              }
-
-              controller.enqueue({
-                type: "text-delta",
-                id: textId,
-                delta: token,
-              });
             }
           );
+
+          reasoningProcessor?.flush();
 
           // Emit text end if we started text
           if (textStartEmitted) {
@@ -715,7 +1054,7 @@ export class LlamaCppLanguageModel implements LanguageModelV3 {
           let finishReason = convertFinishReason(result.finishReason);
 
           if (hasTools && options.toolChoice?.type !== "none") {
-            const toolCalls = parseToolCalls(fullText);
+            const toolCalls = parseToolCalls(visibleText);
 
             if (toolCalls && toolCalls.length > 0) {
               // Emit tool call events

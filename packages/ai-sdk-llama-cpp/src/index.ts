@@ -7,15 +7,20 @@ export {
   LlamaCppLanguageModel,
   type LlamaCppModelConfig,
   type LlamaCppGenerationConfig,
+  type LlamaCppReasoningConfig,
+  type LlamaCppReasoningFormat,
   // Exported for testing
   convertMessages,
   convertFinishReason,
   convertUsage,
+  resolveReasoningConfig,
+  splitReasoningContent,
   // Tool calling exports
   generateToolCallGrammar,
   parseToolCalls,
   buildToolSystemPrompt,
   type ParsedToolCall,
+  type ParsedReasoningPart,
 } from "./llama-cpp-language-model.js";
 export { LlamaCppEmbeddingModel } from "./llama-cpp-embedding-model.js";
 

@@ -1,5 +1,6 @@
 import {
   LlamaCppLanguageModel,
+  type LlamaCppReasoningConfig,
   type LlamaCppModelConfig,
 } from "./llama-cpp-language-model.js";
 import { LlamaCppEmbeddingModel } from "./llama-cpp-embedding-model.js";
@@ -37,6 +38,12 @@ export interface LlamaCppProviderConfig {
    * - Template name: Use a specific built-in template (e.g., "llama3", "gemma")
    */
   chatTemplate?: string;
+
+  /**
+   * Extract model thinking into AI SDK reasoning parts.
+   * Set to true for Gemma 4 (`<|channel>thought\n...<channel|>`) support.
+   */
+  reasoning?: boolean | LlamaCppReasoningConfig;
 }
 
 export interface LlamaCppProvider {
@@ -54,6 +61,7 @@ function createLlamaCpp(): LlamaCppProvider {
       threads: config.threads,
       debug: config.debug,
       chatTemplate: config.chatTemplate,
+      reasoning: config.reasoning,
     };
 
     return new LlamaCppLanguageModel(modelConfig);

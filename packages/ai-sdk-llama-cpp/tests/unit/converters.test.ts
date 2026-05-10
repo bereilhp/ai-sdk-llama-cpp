@@ -2,6 +2,8 @@ import { describe, it, expect } from "vitest";
 import {
   convertFinishReason,
   convertUsage,
+  resolveReasoningConfig,
+  splitReasoningContent,
 } from "../../src/llama-cpp-language-model.js";
 
 describe("convertFinishReason", () => {
@@ -133,5 +135,80 @@ describe("convertUsage", () => {
       expect(result.outputTokens).toHaveProperty("text");
       expect(result.outputTokens).toHaveProperty("reasoning");
     });
+  });
+});
+
+describe("resolveReasoningConfig", () => {
+  it("defaults to Gemma 4 thinking markers", () => {
+    const result = resolveReasoningConfig(true);
+
+    expect(result).toEqual({
+      opening: "<|channel>thought\n",
+      closing: "<channel|>",
+      promptPrefix: "<|think|>\n",
+    });
+  });
+
+  it("supports think tag markers", () => {
+    const result = resolveReasoningConfig({
+      format: "think-tags",
+      promptPrefix: false,
+    });
+
+    expect(result).toEqual({
+      opening: "<think>",
+      closing: "</think>",
+      promptPrefix: undefined,
+    });
+  });
+
+  it("supports custom markers and prompt prefix", () => {
+    const result = resolveReasoningConfig({
+      format: { opening: "[reasoning]", closing: "[/reasoning]" },
+      promptPrefix: "think first\n",
+    });
+
+    expect(result).toEqual({
+      opening: "[reasoning]",
+      closing: "[/reasoning]",
+      promptPrefix: "think first\n",
+    });
+  });
+});
+
+describe("splitReasoningContent", () => {
+  const gemma4Markers = {
+    opening: "<|channel>thought\n",
+    closing: "<channel|>",
+  };
+
+  it("extracts Gemma 4 reasoning and final text", () => {
+    const result = splitReasoningContent(
+      "<|channel>thought\nNeed to calculate.<channel|>The answer is 42.",
+      gemma4Markers
+    );
+
+    expect(result).toEqual([
+      { type: "reasoning", text: "Need to calculate." },
+      { type: "text", text: "The answer is 42." },
+    ]);
+  });
+
+  it("handles empty Gemma 4 thinking blocks", () => {
+    const result = splitReasoningContent(
+      "<|channel>thought\n<channel|>Thinking disabled.",
+      gemma4Markers
+    );
+
+    expect(result).toEqual([
+      { type: "reasoning", text: "" },
+      { type: "text", text: "Thinking disabled." },
+    ]);
+  });
+
+  it("returns text when no reasoning markers are present", () => {
+    const result = splitReasoningContent("Plain answer.", gemma4Markers);
+
+    expect(result).toEqual([{ type: "text", text: "Plain answer." }]);
   });
 });

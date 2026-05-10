@@ -239,6 +239,10 @@ const model = llamaCpp({
   // - "auto" (default): Use the template embedded in the GGUF model file
   // - Template name: Use a specific built-in template (e.g., "llama3", "chatml", "gemma")
   chatTemplate: "auto",
+
+  // Optional: Extract model thinking into AI SDK reasoning parts.
+  // Set to true for Gemma 4 thinking support.
+  reasoning: true,
 });
 ```
 
@@ -251,6 +255,45 @@ The `chatTemplate` option controls how messages are formatted before being sent 
 - `phi3`, `phi4`, `gemma`, `falcon3`, `zephyr`
 - `deepseek`, `deepseek2`, `deepseek3`, `command-r`
 - And more (see llama.cpp documentation for the full list)
+
+#### Reasoning / Thinking
+
+Set `reasoning: true` to enable Gemma 4 thinking support. The provider prepends the Gemma 4 thinking trigger (`<|think|>`) to the first system message and extracts output between `<|channel>thought\n` and `<channel|>` into AI SDK `reasoning` parts.
+
+```typescript
+import { generateText } from "ai";
+import { llamaCpp } from "ai-sdk-llama-cpp";
+
+const model = llamaCpp({
+  modelPath: "./models/gemma-4-31b-it.Q4_K_M.gguf",
+  chatTemplate: "gemma",
+  reasoning: true,
+});
+
+try {
+  const result = await generateText({
+    model,
+    prompt: "Solve 17 * 23 and explain briefly.",
+  });
+
+  console.log(result.reasoningText);
+  console.log(result.text);
+} finally {
+  await model.dispose();
+}
+```
+
+For other thinking formats, pass custom delimiters:
+
+```typescript
+const model = llamaCpp({
+  modelPath: "./models/your-model.gguf",
+  reasoning: {
+    format: { opening: "<think>", closing: "</think>" },
+    promptPrefix: false,
+  },
+});
+```
 
 ### Generation Parameters
 
@@ -303,6 +346,7 @@ Creates a new llama.cpp language model instance.
 - `config.threads` (number, optional): CPU threads. Default: 4
 - `config.debug` (boolean, optional): Enable verbose llama.cpp output. Default: false
 - `config.chatTemplate` (string, optional): Chat template to use for formatting messages. Default: "auto"
+- `config.reasoning` (boolean | object, optional): Extract thinking into AI SDK reasoning parts. `true` uses Gemma 4 markers.
 
 **Returns:** `LlamaCppLanguageModel` - A language model compatible with the Vercel AI SDK
 

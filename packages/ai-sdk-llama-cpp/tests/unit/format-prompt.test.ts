@@ -106,6 +106,57 @@ describe("convertMessages", () => {
         { role: "assistant", content: "Part one. Part two." },
       ]);
     });
+
+    it("does not include assistant reasoning in conversation history", () => {
+      const messages: LanguageModelV3Message[] = [
+        {
+          role: "assistant",
+          content: [
+            { type: "reasoning", text: "Private thinking." },
+            { type: "text", text: "Final answer." },
+          ],
+        },
+      ];
+
+      const result = convertMessages(messages);
+
+      expect(result).toEqual([
+        { role: "assistant", content: "Final answer." },
+      ]);
+    });
+  });
+
+  describe("reasoning prompt prefix", () => {
+    it("adds the prefix to the first system message", () => {
+      const messages: LanguageModelV3Message[] = [
+        { role: "system", content: "You are helpful." },
+        { role: "user", content: [{ type: "text", text: "Hi" }] },
+      ];
+
+      const result = convertMessages(messages, undefined, {
+        promptPrefix: "<|think|>\n",
+      });
+
+      expect(result).toEqual([
+        { role: "system", content: "<|think|>\nYou are helpful." },
+        { role: "user", content: "Hi" },
+      ]);
+    });
+
+    it("adds a system message when no system message exists", () => {
+      const messages: LanguageModelV3Message[] = [
+        { role: "user", content: [{ type: "text", text: "Hi" }] },
+      ];
+
+      const result = convertMessages(messages, undefined, {
+        promptPrefix: "<|think|>\n",
+      });
+
+      expect(result).toEqual([
+        { role: "system", content: "<|think|>\n" },
+        { role: "user", content: "Hi" },
+      ]);
+    });
   });
 
   describe("tool messages", () => {

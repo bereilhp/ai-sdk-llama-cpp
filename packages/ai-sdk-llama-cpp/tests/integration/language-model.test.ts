@@ -166,6 +166,76 @@ describe("LlamaCppLanguageModel Integration", () => {
         })
       );
     });
+
+    it("returns Gemma 4 thinking as reasoning content", async () => {
+      vi.mocked(nativeBinding.generate).mockResolvedValueOnce({
+        text: "<|channel>thought\nI should answer briefly.<channel|>Hello!",
+        promptTokens: 50,
+        completionTokens: 12,
+        finishReason: "stop",
+      });
+
+      const reasoningModel = new LlamaCppLanguageModel({
+        modelPath: "/test/model.gguf",
+        reasoning: true,
+      });
+
+      const result = await reasoningModel.doGenerate({
+        prompt: testMessages,
+      });
+
+      expect(result.content).toEqual([
+        {
+          type: "reasoning",
+          text: "I should answer briefly.",
+          providerMetadata: undefined,
+        },
+        {
+          type: "text",
+          text: "Hello!",
+          providerMetadata: undefined,
+        },
+      ]);
+
+      await reasoningModel.dispose();
+    });
+
+    it("uses visible text for tool call parsing after reasoning", async () => {
+      vi.mocked(nativeBinding.generate).mockResolvedValueOnce({
+        text: '<|channel>thought\nNeed weather.<channel|>{"name":"weather","arguments":{"location":"Tokyo"}}',
+        promptTokens: 50,
+        completionTokens: 20,
+        finishReason: "stop",
+      });
+
+      const reasoningModel = new LlamaCppLanguageModel({
+        modelPath: "/test/model.gguf",
+        reasoning: true,
+      });
+
+      const result = await reasoningModel.doGenerate({
+        prompt: testMessages,
+        tools: [
+          {
+            type: "function",
+            name: "weather",
+            inputSchema: { type: "object" },
+          },
+        ],
+      });
+
+      expect(result.content).toHaveLength(2);
+      expect(result.content[0]).toEqual({
+        type: "reasoning",
+        text: "Need weather.",
+        providerMetadata: undefined,
+      });
+      expect(result.content[1].type).toBe("tool-call");
+      expect(result.content[1]).toHaveProperty("toolName", "weather");
+      expect(result.finishReason.unified).toBe("tool-calls");
+
+      await reasoningModel.dispose();
+    });
   });
 
   describe("doStream", () => {
@@ -304,6 +374,58 @@ describe("LlamaCppLanguageModel Integration", () => {
         expect(delta.id).toBe(expectedId);
       }
       expect(textEnd?.id).toBe(expectedId);
+    });
+
+    it("streams Gemma 4 thinking as reasoning deltas", async () => {
+      vi.mocked(nativeBinding.generateStream).mockImplementationOnce(
+        (handle, opts, onToken) => {
+          onToken("<|channel>");
+          onToken("thought\nI should");
+          onToken(" answer");
+          onToken(" briefly.<channel");
+          onToken("|>Hello");
+          onToken("!");
+          return Promise.resolve({
+            text: "<|channel>thought\nI should answer briefly.<channel|>Hello!",
+            promptTokens: 30,
+            completionTokens: 12,
+            finishReason: "stop",
+          });
+        }
+      );
+
+      const reasoningModel = new LlamaCppLanguageModel({
+        modelPath: "/test/model.gguf",
+        reasoning: true,
+      });
+
+      const { stream } = await reasoningModel.doStream({
+        prompt: testMessages,
+      });
+
+      const parts = await collectStreamParts(stream);
+      const reasoningDeltas = parts.filter((p) => p.type === "reasoning-delta");
+      const textDeltas = parts.filter((p) => p.type === "text-delta");
+
+      expect(parts.map((p) => p.type)).toEqual([
+        "stream-start",
+        "reasoning-start",
+        "reasoning-delta",
+        "reasoning-delta",
+        "reasoning-delta",
+        "reasoning-end",
+        "text-start",
+        "text-delta",
+        "text-delta",
+        "text-end",
+        "finish",
+      ]);
+      expect(reasoningDeltas.map((p) => p.delta).join("")).toBe(
+        "I should answer briefly."
+      );
+      expect(textDeltas.map((p) => p.delta).join("")).toBe("Hello!");
+
+      await reasoningModel.dispose();
     });
   });
 
