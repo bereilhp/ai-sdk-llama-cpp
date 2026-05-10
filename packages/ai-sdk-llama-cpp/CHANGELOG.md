@@ -1,5 +1,11 @@
 # ai-sdk-llama-cpp
 
+## 0.7.1
+
+### Patch Changes
+
+- gemma 4 support
+
 ## 0.7.0
 
 ### Minor Changes
