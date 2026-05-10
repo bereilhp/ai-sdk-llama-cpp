@@ -348,6 +348,9 @@ GenerationResult LlamaModel::generate(const std::vector<ChatMessage> &messages,
   // Apply chat template to get the prompt
   std::string prompt = apply_chat_template(messages);
   if (prompt.empty()) {
+    result.error_message =
+        "Failed to apply chat template. Try setting chatTemplate explicitly, for example "
+        "'gemma', or use debug: true for llama.cpp template diagnostics.";
     return result;
   }
 
@@ -374,6 +377,7 @@ GenerationResult LlamaModel::generate(const std::vector<ChatMessage> &messages,
     llama_batch batch = llama_batch_get_one(prompt_tokens.data() + n_processed, n_chunk);
 
     if (llama_decode(ctx_, batch) != 0) {
+      result.error_message = "Failed to decode prompt";
       return result;
     }
 
@@ -418,6 +422,7 @@ GenerationResult LlamaModel::generate(const std::vector<ChatMessage> &messages,
     // Prepare for next iteration
     llama_batch token_batch = llama_batch_get_one(&new_token, 1);
     if (llama_decode(ctx_, token_batch) != 0) {
+      result.error_message = "Failed to decode generated token";
       break;
     }
     n_cur++;
@@ -425,7 +430,7 @@ GenerationResult LlamaModel::generate(const std::vector<ChatMessage> &messages,
 
   if (result.finish_reason == "error" && result.completion_tokens >= params.max_tokens) {
     result.finish_reason = "length";
-  } else if (result.finish_reason == "error") {
+  } else if (result.finish_reason == "error" && result.error_message.empty()) {
     result.finish_reason = "stop";
   }
 
@@ -440,12 +445,16 @@ GenerationResult LlamaModel::generate_streaming(const std::vector<ChatMessage> &
   result.finish_reason = "error";
 
   if (!ctx_ || !model_) {
+    result.error_message = "Model context is not initialized";
     return result;
   }
 
   // Apply chat template to get the prompt
   std::string prompt = apply_chat_template(messages);
   if (prompt.empty()) {
+    result.error_message =
+        "Failed to apply chat template. Try setting chatTemplate explicitly, for example "
+        "'gemma', or use debug: true for llama.cpp template diagnostics.";
     return result;
   }
 
@@ -472,6 +481,7 @@ GenerationResult LlamaModel::generate_streaming(const std::vector<ChatMessage> &
     llama_batch batch = llama_batch_get_one(prompt_tokens.data() + n_processed, n_chunk);
 
     if (llama_decode(ctx_, batch) != 0) {
+      result.error_message = "Failed to decode prompt";
       return result;
     }
 
@@ -520,6 +530,7 @@ GenerationResult LlamaModel::generate_streaming(const std::vector<ChatMessage> &
     // Prepare for next iteration
     llama_batch token_batch = llama_batch_get_one(&new_token, 1);
     if (llama_decode(ctx_, token_batch) != 0) {
+      result.error_message = "Failed to decode generated token";
       break;
     }
     n_cur++;
@@ -527,7 +538,7 @@ GenerationResult LlamaModel::generate_streaming(const std::vector<ChatMessage> &
 
   if (result.finish_reason == "error" && result.completion_tokens >= params.max_tokens) {
     result.finish_reason = "length";
-  } else if (result.finish_reason == "error") {
+  } else if (result.finish_reason == "error" && result.error_message.empty()) {
     result.finish_reason = "stop";
   }
 

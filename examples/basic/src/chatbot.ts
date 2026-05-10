@@ -2,10 +2,10 @@ import { llamaCpp } from "ai-sdk-llama-cpp";
 import { stepCountIs, ModelMessage, streamText, tool } from "ai";
 import * as readline from "node:readline/promises";
 import { z } from "zod";
+import { modelOptions } from "./model-path.js";
+import { reportError } from "./report-error.js";
 
-const model = llamaCpp({
-  modelPath: "../../models/Ministral-3-14B-Instruct-2512-Q4_K_M.gguf",
-});
+const model = llamaCpp(modelOptions);
 
 const terminal = readline.createInterface({
   input: process.stdin,
@@ -52,6 +52,10 @@ try {
 
     messages.push(...(await result.response).messages);
   }
+} catch (error) {
+  reportError(error);
+  process.exitCode = 1;
 } finally {
   await model.dispose();
+  terminal.close();
 }

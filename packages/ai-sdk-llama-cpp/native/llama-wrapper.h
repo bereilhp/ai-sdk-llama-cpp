@@ -50,6 +50,7 @@ struct GenerationResult {
   int prompt_tokens;
   int completion_tokens;
   std::string finish_reason; // "stop", "length", or "error"
+  std::string error_message;
 };
 
 struct EmbeddingResult {

@@ -110,6 +110,9 @@ public:
     result.Set("promptTokens", Napi::Number::New(Env(), result_.prompt_tokens));
     result.Set("completionTokens", Napi::Number::New(Env(), result_.completion_tokens));
     result.Set("finishReason", Napi::String::New(Env(), result_.finish_reason));
+    if (!result_.error_message.empty()) {
+      result.Set("errorMessage", Napi::String::New(Env(), result_.error_message));
+    }
 
     Callback().Call({Env().Null(), result});
   }
@@ -170,6 +173,9 @@ public:
     result.Set("promptTokens", Napi::Number::New(Env(), result_.prompt_tokens));
     result.Set("completionTokens", Napi::Number::New(Env(), result_.completion_tokens));
     result.Set("finishReason", Napi::String::New(Env(), result_.finish_reason));
+    if (!result_.error_message.empty()) {
+      result.Set("errorMessage", Napi::String::New(Env(), result_.error_message));
+    }
 
     Callback().Call({Env().Null(), result});
   }

@@ -1,10 +1,10 @@
 import { streamText, stepCountIs, tool } from "ai";
 import { z } from "zod";
 import { llamaCpp } from "ai-sdk-llama-cpp";
+import { modelOptions } from "./model-path.js";
+import { reportError } from "./report-error.js";
 
-const model = llamaCpp({
-  modelPath: "../../models/gemma-3-12b-it-Q3_K_M.gguf",
-});
+const model = llamaCpp(modelOptions);
 
 try {
   const result = streamText({
@@ -30,6 +30,9 @@ try {
   }
 
   console.log("\nFinal text:", await result.text);
+} catch (error) {
+  reportError(error);
+  process.exitCode = 1;
 } finally {
   await model.dispose();
 }

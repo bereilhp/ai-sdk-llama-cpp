@@ -1,9 +1,9 @@
 import { embedMany } from "ai";
 import { llamaCpp } from "ai-sdk-llama-cpp";
+import { modelOptions } from "./model-path.js";
+import { reportError } from "./report-error.js";
 
-const model = llamaCpp.embedding({
-  modelPath: "../../models/gemma-3-12b-it-Q3_K_M.gguf",
-});
+const model = llamaCpp.embedding(modelOptions);
 
 try {
   const result = await embedMany({
@@ -15,6 +15,9 @@ try {
   console.log("Dimensions:", result.embeddings[0].length);
   console.log();
   console.log("Usage:", result.usage);
+} catch (error) {
+  reportError(error);
+  process.exitCode = 1;
 } finally {
   await model.dispose();
 }

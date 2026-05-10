@@ -30,6 +30,13 @@ export interface LlamaCppProviderConfig {
    * Enable verbose debug output from llama.cpp (default: false).
    */
   debug?: boolean;
+
+  /**
+   * Chat template to use for formatting messages.
+   * - "auto" (default): Use the template embedded in the GGUF model file
+   * - Template name: Use a specific built-in template (e.g., "llama3", "gemma")
+   */
+  chatTemplate?: string;
 }
 
 export interface LlamaCppProvider {
@@ -46,6 +53,7 @@ function createLlamaCpp(): LlamaCppProvider {
       gpuLayers: config.gpuLayers,
       threads: config.threads,
       debug: config.debug,
+      chatTemplate: config.chatTemplate,
     };
 
     return new LlamaCppLanguageModel(modelConfig);

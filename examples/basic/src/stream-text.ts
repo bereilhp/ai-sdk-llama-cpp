@@ -1,9 +1,9 @@
 import { streamText } from "ai";
 import { llamaCpp } from "ai-sdk-llama-cpp";
+import { modelOptions } from "./model-path.js";
+import { reportError } from "./report-error.js";
 
-const model = llamaCpp({
-  modelPath: "../../models/Ministral-3-14B-Instruct-2512-Q4_K_M.gguf",
-});
+const model = llamaCpp(modelOptions);
 
 try {
   const result = streamText({
@@ -19,6 +19,9 @@ try {
   console.log();
   console.log("Usage:", await result.usage);
   console.log("Finish reason:", await result.finishReason);
+} catch (error) {
+  reportError(error);
+  process.exitCode = 1;
 } finally {
   await model.dispose();
 }

@@ -747,11 +747,7 @@ export class LlamaCppLanguageModel implements LanguageModelV3 {
 
           controller.close();
         } catch (error) {
-          controller.enqueue({
-            type: "error",
-            error,
-          });
-          controller.close();
+          controller.error(error);
         }
       },
     });

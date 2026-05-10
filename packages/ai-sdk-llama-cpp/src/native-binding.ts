@@ -1,4 +1,5 @@
 import { createRequire } from "node:module";
+import { stat } from "node:fs/promises";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -51,6 +52,7 @@ export interface GenerateResult {
   promptTokens: number;
   completionTokens: number;
   finishReason: "stop" | "length" | "error";
+  errorMessage?: string;
 }
 
 export interface EmbedOptions {
@@ -89,17 +91,52 @@ interface NativeBinding {
 }
 
 export function loadModel(options: LoadModelOptions): Promise<number> {
-  return new Promise((resolve, reject) => {
-    binding.loadModel(options, (error, handle) => {
-      if (error) {
-        reject(new Error(error));
-      } else if (handle !== null) {
-        resolve(handle);
-      } else {
-        reject(new Error("Failed to load model: unknown error"));
-      }
-    });
-  });
+  return validateModelPath(options.modelPath).then(
+    () =>
+      new Promise((resolve, reject) => {
+        binding.loadModel(options, (error, handle) => {
+          if (error) {
+            reject(new Error(error));
+          } else if (handle !== null) {
+            resolve(handle);
+          } else {
+            reject(new Error("Failed to load model: unknown error"));
+          }
+        });
+      })
+  );
+}
+
+async function validateModelPath(modelPath: string): Promise<void> {
+  if (modelPath.startsWith("~/")) {
+    throw new Error(
+      `Failed to load model: modelPath uses '~', which is not expanded automatically. ` +
+        `Pass an absolute path instead. Received: ${modelPath}`
+    );
+  }
+
+  let modelFile;
+  try {
+    modelFile = await stat(modelPath);
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") {
+      throw new Error(
+        `Failed to load model: file does not exist at ${modelPath}`
+      );
+    }
+
+    throw new Error(
+      `Failed to load model: could not access ${modelPath}: ${
+        error instanceof Error ? error.message : String(error)
+      }`
+    );
+  }
+
+  if (!modelFile.isFile()) {
+    throw new Error(
+      `Failed to load model: expected a GGUF file but found a directory at ${modelPath}`
+    );
+  }
 }
 
 export function unloadModel(handle: number): boolean {
@@ -115,7 +152,13 @@ export function generate(
       if (error) {
         reject(new Error(error));
       } else if (result) {
-        resolve(result);
+        if (result.finishReason === "error") {
+          reject(
+            new Error(result.errorMessage ?? "Failed to generate: unknown error")
+          );
+        } else {
+          resolve(result);
+        }
       } else {
         reject(new Error("Failed to generate: unknown error"));
       }
@@ -133,7 +176,15 @@ export function generateStream(
       if (error) {
         reject(new Error(error));
       } else if (result) {
-        resolve(result);
+        if (result.finishReason === "error") {
+          reject(
+            new Error(
+              result.errorMessage ?? "Failed to generate stream: unknown error"
+            )
+          );
+        } else {
+          resolve(result);
+        }
       } else {
         reject(new Error("Failed to generate stream: unknown error"));
       }

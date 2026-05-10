@@ -449,7 +449,7 @@ describe("LlamaCppLanguageModel Integration", () => {
       ).rejects.toThrow("Model not found");
     });
 
-    it("emits error part in stream on failure", async () => {
+    it("errors the stream on failure", async () => {
       vi.mocked(nativeBinding.generateStream).mockImplementationOnce(() => {
         throw new Error("Stream generation failed");
       });
@@ -458,11 +458,9 @@ describe("LlamaCppLanguageModel Integration", () => {
         prompt: [{ role: "user", content: [{ type: "text", text: "test" }] }],
       });
 
-      const parts = await collectStreamParts(stream);
-      const errorPart = parts.find((p) => p.type === "error");
-
-      expect(errorPart).toBeDefined();
-      expect(errorPart?.error).toBeInstanceOf(Error);
+      await expect(collectStreamParts(stream)).rejects.toThrow(
+        "Stream generation failed"
+      );
     });
   });
 
