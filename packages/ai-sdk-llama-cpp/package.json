@@ -19,7 +19,7 @@
   ],
   "llamaCpp": {
     "repo": "https://github.com/ggerganov/llama.cpp.git",
-    "commit": "600a36647812a4051e19261026a2186345142e5b"
+    "commit": "f3c3e0e9a087835639733485b8900b195ba4ca47"
   },
   "scripts": {
     "postinstall": "node scripts/postinstall.cjs",
